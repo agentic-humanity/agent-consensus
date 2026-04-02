@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { Scale, Plus, MessageSquare, Clock, Settings } from 'lucide-vue-next'
+import { Scale, Plus, MessageSquare, Clock, Settings, Sun, Moon } from 'lucide-vue-next'
 
 const route = useRoute()
 const sessions = ref([
@@ -14,6 +14,15 @@ const isDark = ref(false)
 onMounted(() => {
   isDark.value = document.documentElement.classList.contains('dark')
 })
+
+function toggleDarkMode() {
+  isDark.value = !isDark.value
+  if (isDark.value) {
+    document.documentElement.classList.add('dark')
+  } else {
+    document.documentElement.classList.remove('dark')
+  }
+}
 </script>
 
 <template>
@@ -44,6 +53,13 @@ onMounted(() => {
 
           <!-- Right Actions -->
           <div class="ml-auto flex items-center gap-2">
+            <button 
+              @click="toggleDarkMode"
+              class="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            >
+              <Sun v-if="isDark" class="w-4 h-4" />
+              <Moon v-else class="w-4 h-4" />
+            </button>
             <button class="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
               <Settings class="w-4 h-4" />
             </button>
