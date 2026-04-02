@@ -1,0 +1,6 @@
+{
+  "openrouterApiKey": "sk-or-v1-your-key-here",
+  "defaultBudget": 1.0,
+  "defaultMaxRounds": 5,
+  "defaultThreshold": 7
+}

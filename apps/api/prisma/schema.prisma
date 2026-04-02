@@ -1,0 +1,46 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:../data/consensus.db"
+}
+
+model Session {
+  id            String   @id @default(cuid())
+  mode          String
+  topic         String
+  config        String   // JSON
+  status        String   @default("pending")
+  totalCost     Float    @default(0)
+  currentRound  Int      @default(0)
+  createdAt     DateTime @default(now())
+  finishedAt    DateTime?
+  rounds        Round[]
+}
+
+model Round {
+  id        String   @id @default(cuid())
+  session   Session  @relation(fields: [sessionId], references: [id])
+  sessionId String
+  roundNum  Int
+  avgScore  Float?
+  decision  String   @default("continue")
+  events    Event[]
+}
+
+model Event {
+  id            String   @id @default(cuid())
+  round         Round    @relation(fields: [roundId], references: [id])
+  roundId       String
+  role          String
+  modelId       String
+  systemPrompt  String?
+  inputMessages String   // JSON
+  rawOutput     String
+  parsedScore   Float?
+  costUsd       Float    @default(0)
+  latencyMs     Int      @default(0)
+  createdAt     DateTime @default(now())
+}

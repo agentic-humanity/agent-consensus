@@ -1,0 +1,19 @@
+{
+  "name": "agent-consensus",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-model discussion system — let LLMs debate like a parliament",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0"
+  },
+  "packageManager": "pnpm@10.28.2",
+  "license": "MIT"
+}

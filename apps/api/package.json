@@ -1,0 +1,29 @@
+{
+  "name": "@consensus/api",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Agent Consensus API server powered by Hono",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node --import tsx src/index.ts",
+    "build": "tsc --project tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'no linter configured'",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@consensus/core": "workspace:*",
+    "hono": "^4.7.0",
+    "@hono/node-server": "^1.14.0",
+    "@prisma/client": "^6.5.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "prisma": "^6.5.0"
+  }
+}
