@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node --import tsx src/index.ts",
-    "build": "tsc --project tsconfig.build.json",
+    "build": "tsc",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "echo 'no linter configured'",

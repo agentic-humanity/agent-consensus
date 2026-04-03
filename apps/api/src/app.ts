@@ -1,17 +1,39 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 
-const app = new Hono()
+interface OpenRouterModelsResponse {
+  data: Array<{
+    id: string
+    name: string
+    pricing?: {
+      prompt?: string
+      completion?: string
+    }
+    context_length?: number
+  }>
+}
 
-// Demo models data
-const DEMO_MODELS = [
-  { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', provider: 'Anthropic', inputPrice: 3, outputPrice: 15, contextLength: 200000 },
-  { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'OpenAI', inputPrice: 5, outputPrice: 15, contextLength: 128000 },
-  { id: 'google/gemini-pro-1.5', name: 'Gemini Pro 1.5', provider: 'Google', inputPrice: 1.25, outputPrice: 5, contextLength: 1000000 },
-  { id: 'meta-llama/llama-3.1-70b-instruct', name: 'Llama 3.1 70B', provider: 'Meta', inputPrice: 0.52, outputPrice: 0.75, contextLength: 128000 },
-  { id: 'anthropic/claude-3-haiku', name: 'Claude 3 Haiku', provider: 'Anthropic', inputPrice: 0.25, outputPrice: 1.25, contextLength: 200000 },
-  { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', provider: 'OpenAI', inputPrice: 0.15, outputPrice: 0.6, contextLength: 128000 },
-]
+interface OpenRouterKeyResponse {
+  data?: {
+    label?: string
+    total_credits?: number
+    total_usage?: number
+  }
+}
+
+interface OpenRouterChatResponse {
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+  }
+  choices?: Array<{
+    message?: {
+      content?: string
+    }
+  }>
+}
+
+const app = new Hono()
 
 // In-memory storage
 const sessions = new Map()
@@ -21,14 +43,118 @@ app.use('*', cors())
 
 app.get('/api/health', (c) => c.json({ status: 'ok', service: 'agent-consensus' }))
 
+// 获取模型列表 - 需要 API Key
 app.get('/api/models', async (c) => {
-  return c.json({ models: DEMO_MODELS })
+  const apiKey = c.req.header('x-api-key')
+  
+  if (!apiKey) {
+    return c.json({ error: 'API Key required. Please set your OpenRouter API Key in settings.' }, 401)
+  }
+  
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/models', {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'HTTP-Referer': 'https://github.com/agentic-humanity/agent-consensus',
+        'X-Title': 'Agent Consensus',
+      },
+    })
+    
+    if (!response.ok) {
+      if (response.status === 401) {
+        return c.json({ error: 'Invalid API Key' }, 401)
+      }
+      throw new Error(`HTTP ${response.status}`)
+    }
+    
+    const data = await response.json() as OpenRouterModelsResponse
+    
+    const models = data.data.map((m) => ({
+      id: m.id,
+      name: m.name,
+      provider: m.id.split('/')[0] ?? 'unknown',
+      inputPrice: parseFloat(m.pricing?.prompt ?? '0') * 1000000,
+      outputPrice: parseFloat(m.pricing?.completion ?? '0') * 1000000,
+      contextLength: m.context_length ?? 4096,
+    })).sort((a, b) => {
+      if (a.provider !== b.provider) {
+        return a.provider.localeCompare(b.provider)
+      }
+      return a.name.localeCompare(b.name)
+    })
+    
+    return c.json({ models })
+  } catch (error) {
+    console.error('Failed to fetch models:', error)
+    return c.json({ error: 'Failed to fetch models from OpenRouter' }, 500)
+  }
 })
 
+// 获取余额
 app.get('/api/credits', async (c) => {
-  return c.json({ total: 100, used: 0.42, remaining: 99.58 })
+  const apiKey = c.req.header('x-api-key')
+  
+  if (!apiKey) {
+    return c.json({ error: 'API Key required' }, 401)
+  }
+  
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/auth/key', {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+      },
+    })
+    
+    if (!response.ok) {
+      if (response.status === 401) {
+        return c.json({ error: 'Invalid API Key' }, 401)
+      }
+      throw new Error(`HTTP ${response.status}`)
+    }
+    
+    const data = await response.json() as OpenRouterKeyResponse
+    return c.json({
+      total: data.data?.total_credits ?? 0,
+      used: data.data?.total_usage ?? 0,
+      remaining: (data.data?.total_credits ?? 0) - (data.data?.total_usage ?? 0),
+    })
+  } catch (error) {
+    console.error('Failed to fetch credits:', error)
+    return c.json({ error: 'Failed to fetch credits' }, 500)
+  }
 })
 
+// 验证 API Key
+app.post('/api/validate-key', async (c) => {
+  const { apiKey } = await c.req.json()
+  
+  if (!apiKey || !apiKey.startsWith('sk-or-v1-')) {
+    return c.json({ valid: false, error: 'Invalid API Key format' })
+  }
+  
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/auth/key', {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+      },
+    })
+    
+    if (response.ok) {
+      const data = await response.json() as OpenRouterKeyResponse
+      return c.json({ 
+        valid: true, 
+        label: data.data?.label ?? 'Unknown',
+        remaining: (data.data?.total_credits ?? 0) - (data.data?.total_usage ?? 0)
+      })
+    } else {
+      return c.json({ valid: false, error: 'Invalid API Key' })
+    }
+  } catch {
+    return c.json({ valid: false, error: 'Failed to validate key' })
+  }
+})
+
+// 会话 CRUD
 app.get('/api/sessions', async (c) => {
   const sessionList = Array.from(sessions.values()).sort((a: any, b: any) => 
     new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
@@ -44,7 +170,7 @@ app.post('/api/sessions', async (c) => {
     id,
     mode: body.mode,
     topic: body.topic,
-    config: JSON.stringify(body.config),
+    config: body.config,
     status: 'pending',
     totalCost: 0,
     currentRound: 0,
@@ -62,92 +188,216 @@ app.get('/api/sessions/:id', async (c) => {
   return c.json(session)
 })
 
+// 真实调用 OpenRouter 进行讨论
 app.post('/api/sessions/:id/start', async (c) => {
+  const apiKey = c.req.header('x-api-key')
+  
+  if (!apiKey) {
+    return c.json({ error: 'API Key required' }, 401)
+  }
+  
   const sessionId = c.req.param('id')
   const session = sessions.get(sessionId)
   
   if (!session) return c.json({ error: 'Not found' }, 404)
   
-  // Simulate full discussion flow
-  const now = Date.now()
-  
-  const rounds = [
-    {
-      roundNum: 1,
-      avgScore: 5.5,
-      decision: 'continue',
-      events: [
-        {
-          role: 'proposer',
-          model: 'Claude 3.5 Sonnet',
-          output: 'I propose a JWT-based authentication system with refresh tokens. The implementation includes:\n\n1. Access tokens with 15-minute expiration\n2. Refresh tokens with 7-day expiration stored in httpOnly cookies\n3. Token rotation on each refresh\n4. Secure logout with token blacklisting\n\nThis approach provides a good balance between security and user experience.',
-          score: null,
-          costUsd: 0.002,
-          latencyMs: 1200
-        },
-        {
-          role: 'reviewer',
-          model: 'GPT-4o',
-          output: 'The proposal is solid but lacks multi-factor authentication (MFA). In 2025, MFA should be a standard requirement for any authentication system. I recommend adding TOTP-based 2FA as an optional but recommended feature.\n\nScore: 6/10 - Good foundation, missing critical security features.',
-          score: 6,
-          costUsd: 0.003,
-          latencyMs: 1500
-        },
-        {
-          role: 'reviewer',
-          model: 'Gemini Pro 1.5',
-          output: 'The JWT approach is well-established, but the proposal lacks details about:\n- Rate limiting to prevent brute force attacks\n- Account lockout mechanisms\n- Password strength requirements\n- Session management across devices\n\nScore: 5/10 - Adequate but incomplete.',
-          score: 5,
-          costUsd: 0.001,
-          latencyMs: 800
-        }
-      ]
-    },
-    {
-      roundNum: 2,
-      avgScore: 8.0,
-      decision: 'completed',
-      events: [
-        {
-          role: 'proposer',
-          model: 'Claude 3.5 Sonnet',
-          output: 'Thank you for the feedback. Here is the revised proposal:\n\n1. **MFA Support**: TOTP-based 2FA using authenticator apps, with backup codes\n2. **Security Enhancements**:\n   - Rate limiting: 5 failed attempts = 15-min lockout\n   - Account lockout after 10 failed attempts (email notification)\n   - Password requirements: 12+ chars, mixed case, numbers, symbols\n   - Device fingerprinting for suspicious login detection\n3. **Session Management**:\n   - View and revoke active sessions\n   - Geo-location tracking\n   - Email notifications for new device logins\n4. **OAuth Integration**: Google, GitHub, Apple sign-in support\n\nThis comprehensive solution addresses all security concerns raised.',
-          score: null,
-          costUsd: 0.004,
-          latencyMs: 1800
-        },
-        {
-          role: 'reviewer',
-          model: 'GPT-4o',
-          output: 'Excellent revision! The addition of MFA, rate limiting, and comprehensive session management addresses all my concerns. The OAuth integration is a nice bonus for user experience.\n\nScore: 8/10 - Production-ready solution.',
-          score: 8,
-          costUsd: 0.003,
-          latencyMs: 1400
-        },
-        {
-          role: 'reviewer',
-          model: 'Gemini Pro 1.5',
-          output: 'The revised proposal is comprehensive and well-thought-out. The security measures are appropriate for an enterprise-grade system. I particularly appreciate the device fingerprinting and geo-location features.\n\nScore: 8/10 - Ready for implementation.',
-          score: 8,
-          costUsd: 0.002,
-          latencyMs: 1100
-        }
-      ]
-    }
-  ]
-  
-  // Update session
-  session.status = 'completed'
-  session.totalCost = 0.015
-  session.currentRound = 2
-  session.finishedAt = new Date().toISOString()
+  const config = session.config
+  session.status = 'running'
   sessions.set(sessionId, session)
   
-  return c.json({
-    ...session,
-    rounds,
-    finalOutput: 'Based on the multi-model discussion, the consensus is:\n\n**Recommended Architecture**: JWT-based authentication with comprehensive security features\n\n**Key Components**:\n1. Short-lived access tokens (15 min) + refresh tokens (7 days)\n2. TOTP-based MFA with backup codes\n3. Rate limiting and account lockout\n4. Strong password requirements\n5. Session management with device tracking\n6. OAuth 2.0 integration\n\n**Consensus Achieved**: Average score improved from 5.5/10 to 8.0/10 after 2 rounds of iteration.'
-  })
+  const rounds = []
+  let totalCost = 0
+  
+  try {
+    if (session.mode === 'proposal') {
+      // Proposal-Review Mode
+      const { proposerModel, reviewerModels, threshold = 7, maxRounds = 5 } = config
+      
+      let currentRound = 1
+      let completed = false
+      
+      while (currentRound <= maxRounds && !completed) {
+        const roundEvents = []
+        
+        // Proposer generates proposal
+        const proposerStart = Date.now()
+        const proposerResponse = await callOpenRouter(apiKey, proposerModel, [
+          { role: 'system', content: 'You are a solution architect. Generate a detailed technical proposal for the given topic.' },
+          { role: 'user', content: `Topic: ${session.topic}\n\nPlease provide a comprehensive proposal.` }
+        ])
+        const proposerLatency = Date.now() - proposerStart
+        
+        roundEvents.push({
+          role: 'proposer',
+          model: proposerModel,
+          output: proposerResponse.content,
+          score: null,
+          costUsd: proposerResponse.cost,
+          latencyMs: proposerLatency
+        })
+        totalCost += proposerResponse.cost
+        
+        // Reviewers evaluate
+        const scores = []
+        for (const reviewerModel of reviewerModels) {
+          const reviewerStart = Date.now()
+          const reviewerResponse = await callOpenRouter(apiKey, reviewerModel, [
+            { role: 'system', content: 'You are a critical reviewer. Review the proposal and provide constructive feedback. End your response with "Score: X/10" where X is your rating.' },
+            { role: 'user', content: `Topic: ${session.topic}\n\nProposal:\n${proposerResponse.content}\n\nPlease review this proposal and provide your score (1-10).` }
+          ])
+          const reviewerLatency = Date.now() - reviewerStart
+          
+          // Extract score from response
+          const scoreMatch = reviewerResponse.content.match(/Score:\s*(\d+(?:\.\d+)?)\s*\/\s*10/i)
+          const score = scoreMatch ? parseFloat(scoreMatch[1]) : null
+          if (score) scores.push(score)
+          
+          roundEvents.push({
+            role: 'reviewer',
+            model: reviewerModel,
+            output: reviewerResponse.content,
+            score,
+            costUsd: reviewerResponse.cost,
+            latencyMs: reviewerLatency
+          })
+          totalCost += reviewerResponse.cost
+        }
+        
+        const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0
+        const decision = avgScore >= threshold ? 'completed' : 'continue'
+        
+        rounds.push({
+          roundNum: currentRound,
+          avgScore: Math.round(avgScore * 10) / 10,
+          decision,
+          events: roundEvents
+        })
+        
+        if (decision === 'completed' || currentRound >= maxRounds) {
+          completed = true
+        }
+        
+        currentRound++
+      }
+    } else {
+      // Roundtable Mode
+      const { participantModels, summarizerModel } = config
+      const roundEvents = []
+      const perspectives = []
+      
+      // Participants provide perspectives
+      for (const model of participantModels) {
+        const start = Date.now()
+        const response = await callOpenRouter(apiKey, model, [
+          { role: 'system', content: 'You are participating in a roundtable discussion. Share your perspective on the topic.' },
+          { role: 'user', content: `Topic: ${session.topic}\n\nShare your perspective.` }
+        ])
+        const latency = Date.now() - start
+        
+        perspectives.push(`${model}: ${response.content}`)
+        roundEvents.push({
+          role: 'participant',
+          model,
+          output: response.content,
+          score: null,
+          costUsd: response.cost,
+          latencyMs: latency
+        })
+        totalCost += response.cost
+      }
+      
+      // Summarizer consolidates
+      const summarizerStart = Date.now()
+      const summaryResponse = await callOpenRouter(apiKey, summarizerModel, [
+        { role: 'system', content: 'You are a facilitator. Summarize the key points from all perspectives and provide a consensus view.' },
+        { role: 'user', content: `Topic: ${session.topic}\n\nPerspectives:\n${perspectives.join('\n\n')}\n\nPlease provide a summary and consensus.` }
+      ])
+      const summarizerLatency = Date.now() - summarizerStart
+      
+      roundEvents.push({
+        role: 'summarizer',
+        model: summarizerModel,
+        output: summaryResponse.content,
+        score: null,
+        costUsd: summaryResponse.cost,
+        latencyMs: summarizerLatency
+      })
+      totalCost += summaryResponse.cost
+      
+      rounds.push({
+        roundNum: 1,
+        avgScore: null,
+        decision: 'completed',
+        events: roundEvents
+      })
+    }
+    
+    // Update session
+    session.status = 'completed'
+    session.totalCost = Math.round(totalCost * 1000) / 1000
+    session.currentRound = rounds.length
+    session.finishedAt = new Date().toISOString()
+    session.rounds = rounds
+    sessions.set(sessionId, session)
+    
+    return c.json(session)
+    
+  } catch (error: any) {
+    session.status = 'failed'
+    sessions.set(sessionId, session)
+    console.error('Session failed:', error)
+    return c.json({ error: error.message || 'Session failed' }, 500)
+  }
 })
+
+// Helper function to call OpenRouter
+async function callOpenRouter(apiKey: string, model: string, messages: any[]) {
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://github.com/agentic-humanity/agent-consensus',
+      'X-Title': 'Agent Consensus',
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.7,
+    }),
+  })
+  
+  if (!response.ok) {
+    const error = await response.text()
+    throw new Error(`OpenRouter error: ${error}`)
+  }
+  
+  const data = await response.json() as OpenRouterChatResponse
+  const usage = data.usage ?? {}
+  
+  const modelInfo = await getModelPricing(model)
+  const inputTokens = usage.prompt_tokens ?? 0
+  const outputTokens = usage.completion_tokens ?? 0
+  const cost = (inputTokens * modelInfo.inputPrice + outputTokens * modelInfo.outputPrice) / 1000000
+  
+  return {
+    content: data.choices?.[0]?.message?.content ?? '',
+    cost: Math.max(cost, 0.0001),
+  }
+}
+
+// Cache for model pricing
+const pricingCache = new Map()
+
+async function getModelPricing(modelId: string) {
+  if (pricingCache.has(modelId)) {
+    return pricingCache.get(modelId)
+  }
+  
+  // Default pricing
+  const defaultPricing = { inputPrice: 3, outputPrice: 15 }
+  pricingCache.set(modelId, defaultPricing)
+  return defaultPricing
+}
 
 export { app }
